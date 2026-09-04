@@ -606,7 +606,25 @@ function drawPeople(){
   }
 }
 
+function sceneReady(){
+  const scenery=scenes[zone];
+  if(!scenery.complete || !scenery.naturalWidth) return false;
+  if(!goatAtlas.complete || !goatAtlas.naturalWidth) return false;
+  if(zone==='place' && (!humanAtlas.complete || !humanAtlas.naturalWidth)) return false;
+  return true;
+}
+
+function drawLoading(){
+  ctx.fillStyle='#17221d';ctx.fillRect(0,0,c.width,c.height);
+  ctx.fillStyle='#facc15';ctx.font='bold 15px monospace';ctx.textAlign='center';
+  ctx.fillText('CHARGEMENT DE BÉA…',c.width/2,c.height/2-8);
+  ctx.fillStyle='#fff7df';ctx.font='9px monospace';
+  ctx.fillText('Les chemins d’Aumetz arrivent',c.width/2,c.height/2+14);
+  ctx.textAlign='left';
+}
+
 function draw(){
+  if(!sceneReady()){drawLoading();return}
   drawBackground();
   drawPeople();
   if(zone==='enclos') goat({...beb,x:beb.x-cameraX},'beb');
