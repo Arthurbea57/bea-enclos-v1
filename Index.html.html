@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Béa à Aumetz — Prototype</title>
+<style>
+  :root{
+    --ui:#111827cc;
+    --ui2:#0f172ae6;
+    --txt:#f8fafc;
+    --accent:#facc15;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{
+    margin:0;
+    min-height:100vh;
+    background:#0b1220;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    color:var(--txt);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    overflow:hidden;
+  }
+  #wrap{
+    width:min(100vw, 1100px);
+    height:min(100vh, 760px);
+    position:relative;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  canvas{
+    width:100%;
+    height:100%;
+    object-fit:contain;
+    image-rendering:pixelated;
+    image-rendering:crisp-edges;
+    background:#7db169;
+    box-shadow:0 20px 60px #0008;
+    border-radius:18px;
+  }
+  .hud{
+    position:absolute;left:18px;top:18px;
+    background:var(--ui);
+    border:1px solid #ffffff22;
+    backdrop-filter:blur(8px);
+    border-radius:12px;
+    padding:10px 12px;
+    font-size:14px;
+    line-height:1.45;
+    pointer-events:none;
+  }
+  .hud b{color:var(--accent)}
+  .hint{
+    position:absolute;right:18px;top:18px;
+    background:var(--ui);
+    border:1px solid #ffffff22;
+    border-radius:12px;
+    padding:10px 12px;
+    font-size:12px;
+    line-height:1.45;
+    text-align:right;
+    pointer-events:none;
+  }
+  .mobile{
+    position:absolute;left:0;right:0;bottom:16px;
+    display:flex;justify-content:space-between;align-items:end;
+    padding:0 16px;
+    pointer-events:none;
+  }
+  .dpad,.actions{display:grid;gap:8px;pointer-events:auto}
+  .dpad{grid-template-columns:56px 56px 56px;grid-template-rows:56px 56px}
+  .dpad button,.actions button{
+    border:none;border-radius:14px;background:#111827cc;color:#fff;
+    font:700 18px ui-monospace,monospace;box-shadow:0 6px 16px #0005;
+    border:1px solid #ffffff22;touch-action:none;
+  }
+  .dpad .up{grid-column:2}.dpad .left{grid-column:1;grid-row:2}.dpad .down{grid-column:2;grid-row:2}.dpad .right{grid-column:3;grid-row:2}
+  .actions{grid-template-columns:78px 78px}
+  .actions button{height:60px;font-size:12px}
+  .actions .graze{background:#355e3bcc}
+  .actions .headbutt{background:#6b2d2dcc}
+  @media (hover:hover) and (pointer:fine){
+    .mobile{opacity:.38}
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="480" height="320"></canvas>
+
+  <div class="hud">
+    <div><b>BÉA</b> · Enclos d’Aumetz</div>
+    <div>🌿 Brouté : <span id="grassCount">0</span></div>
+    <div>💥 Bigflo : <span id="bigfloHP">3</span>/3</div>
+  </div>
+  <div class="hint">
+    Flèches / WASD : marcher<br>
+    E ou espace : brouter<br>
+    F : coup de tête
+  </div>
+
+  <div class="mobile">
+    <div class="dpad">
+      <button class="up" data-k="ArrowUp">▲</button>
+      <button class="left" data-k="ArrowLeft">◀</button>
+      <button class="down" data-k="ArrowDown">▼</button>
+      <button class="right" data-k="ArrowRight">▶</button>
+    </div>
+    <div class="actions">
+      <button class="graze" data-act="graze">BROUTER</button>
+      <button class="headbutt" data-act="headbutt">COUP DE TÊTE</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const c = document.getElementById('game');
+const ctx = c.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+const grassEl = document.getElementById('grassCount');
+const hpEl = document.getElementById('bigfloHP');
+
+const keys = {};
+let grassCount = 0;
+let msg = "Bienvenue dans l’enclos de Béa";
+let msgTimer = 180;
+
+const world = {
+  fence:{x:26,y:52,w:426,h:236},
+  tunnel:{x:194,y:24,w:92,h:43},
+  shed:{x:47,y:81,w:84,h:55},
+};
+
+const patches = Array.from({length:28}, (_,i)=>({
+  x:42 + (i*73)%380,
+  y:76 + (i*47)%190,
+  eaten:false,
+  r:4 + (i%3)
+}));
+
+const obstacles = [
+  {x:74,y:208,w:55,h:15,type:'log'},
+  {x:330,y:212,w:26,h:20,type:'rock'},
+  {x:360,y:95,w:20,h:18,type:'rock'},
+  {x:147,y:106,w:16,h:13,type:'rock'}
+];
+
+const bea = {x:214,y:204,r:8,dir:1,speed:1.25,attack:0,graze:0};
+const beb = {x:154,y:176,r:8,dir:1,t:0};
+const bigflo = {x:316,y:170,r:11,dir:-1,hp:3,stun:0,respawn:0,chain:0};
+
+function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
+function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
+
+function blocked(nx,ny){
+  if(nx < 38 || nx > 442 || ny < 67 || ny > 276) return true;
+  for(const o of obstacles){
+    if(nx > o.x-7 && nx < o.x+o.w+7 && ny > o.y-7 && ny < o.y+o.h+7) return true;
+  }
+  return false;
+}
+
+function update(){
+  let dx=0,dy=0;
+  if(keys.ArrowLeft||keys.a) dx--;
+  if(keys.ArrowRight||keys.d) dx++;
+  if(keys.ArrowUp||keys.w) dy--;
+  if(keys.ArrowDown||keys.s) dy++;
+  if(dx||dy){
+    const len=Math.hypot(dx,dy); dx/=len;dy/=len;
+    const nx=bea.x+dx*bea.speed, ny=bea.y+dy*bea.speed;
+    if(!blocked(nx,bea.y)) bea.x=nx;
+    if(!blocked(bea.x,ny)) bea.y=ny;
+    if(dx) bea.dir=Math.sign(dx);
+  }
+  if(bea.attack>0) bea.attack--;
+  if(bea.graze>0) bea.graze--;
+  if(msgTimer>0) msgTimer--;
+
+  // Beb: petit mouvement calme
+  beb.t+=0.018;
+  beb.x += Math.cos(beb.t)*0.12;
+  beb.y += Math.sin(beb.t*0.7)*0.08;
+
+  // Bigflo suit Béa seulement à moyenne distance
+  if(bigflo.respawn>0){
+    bigflo.respawn--;
+    if(bigflo.respawn===0){
+      bigflo.hp=3; bigflo.x=330; bigflo.y=164; bigflo.stun=80;
+      hpEl.textContent=bigflo.hp;
+      say("Bigflo revient, chaîne au vent…");
+    }
+  } else if(bigflo.stun>0){
+    bigflo.stun--;
+  } else {
+    const d=dist(bea,bigflo);
+    if(d<120 && d>24){
+      const vx=(bea.x-bigflo.x)/d, vy=(bea.y-bigflo.y)/d;
+      bigflo.x += vx*0.42;
+      bigflo.y += vy*0.42;
+      if(vx) bigflo.dir=Math.sign(vx);
+    }
+    bigflo.chain += 0.12;
+  }
+
+  requestAnimationFrame(loop);
+}
+
+function say(t){ msg=t; msgTimer=150; }
+
+function graze(){
+  if(bea.graze>0) return;
+  bea.graze=50;
+  let best=null,bd=999;
+  for(const p of patches){
+    if(p.eaten) continue;
+    const d=Math.hypot(p.x-bea.x,p.y-bea.y);
+    if(d<bd){bd=d;best=p}
+  }
+  if(best && bd<22){
+    best.eaten=true; grassCount++; grassEl.textContent=grassCount;
+    say(grassCount%5===0 ? "Béa est très concentrée sur son herbe." : "Miam.");
+  } else {
+    say("Pas assez d’herbe sous le museau.");
+  }
+}
+
+function headbutt(){
+  if(bea.attack>0) return;
+  bea.attack=24;
+  if(bigflo.respawn>0) return;
+  const d=dist(bea,bigflo);
+  if(d<34){
+    bigflo.hp--;
+    hpEl.textContent=bigflo.hp;
+    const dx=bigflo.x-bea.x, dy=bigflo.y-bea.y, L=Math.max(1,Math.hypot(dx,dy));
+    bigflo.x += dx/L*20; bigflo.y += dy/L*20;
+    bigflo.stun=45;
+    say(bigflo.hp>0 ? "POC ! Bigflo recule." : "Bigflo s’enfuit !");
+    if(bigflo.hp<=0){
+      bigflo.respawn=420;
+      bigflo.x=-100; bigflo.y=-100;
+    }
+  } else {
+    say("Béa donne un coup de tête dans le vide.");
+  }
+}
+
+function drawBackground(){
+  // ciel lointain / village flouté simulé
+  ctx.fillStyle='#bfe2ff'; ctx.fillRect(0,0,480,320);
+  ctx.fillStyle='#7ca56d'; ctx.fillRect(0,42,480,278);
+
+  // lointain volontairement simplifié/pixelisé
+  ctx.fillStyle='#72926b';
+  for(let i=0;i<30;i++){
+    const x=(i*31)%480, h=8+(i*7)%18;
+    ctx.fillRect(x,40-h,12,h);
+  }
+  // silhouettes maisons Aumetz
+  const houses=[[12,52,44],[67,47,36],[330,49,42],[383,45,50],[437,50,34]];
+  for(const [x,y,w] of houses){
+    ctx.fillStyle='#d8c4a8';ctx.fillRect(x,y,w,25);
+    ctx.fillStyle='#b7654f';
+    ctx.beginPath();ctx.moveTo(x-3,y);ctx.lineTo(x+w/2,y-10);ctx.lineTo(x+w+3,y);ctx.fill();
+  }
+  // chevalement au loin
+  ctx.strokeStyle='#59524a';ctx.lineWidth=3;
+  ctx.beginPath();ctx.moveTo(420,63);ctx.lineTo(443,20);ctx.lineTo(454,69);ctx.stroke();
+  ctx.strokeStyle='#d2b51f';ctx.lineWidth=2;
+  ctx.strokeRect(439,18,17,8);
+
+  // sol enclos
+  ctx.fillStyle='#8dbd67';ctx.fillRect(26,52,426,236);
+  ctx.fillStyle='#9a825b';
+  for(let i=0;i<40;i++){
+    const x=35+(i*83)%400,y=65+(i*53)%210;
+    ctx.fillRect(x,y,2+(i%4),2);
+  }
+
+  // chemin vers tunnel
+  ctx.fillStyle='#b9a57e';
+  ctx.beginPath();ctx.moveTo(205,288);ctx.lineTo(225,62);ctx.lineTo(270,62);ctx.lineTo(286,288);ctx.fill();
+
+  // tunnel pierre
+  ctx.fillStyle='#817a6b';ctx.fillRect(world.tunnel.x,world.tunnel.y,world.tunnel.w,world.tunnel.h);
+  ctx.fillStyle='#111827';
+  ctx.beginPath();
+  ctx.arc(240,67,26,Math.PI,Math.PI*2);
+  ctx.lineTo(266,67);ctx.lineTo(266,47);ctx.lineTo(214,47);ctx.lineTo(214,67);ctx.fill();
+  ctx.fillStyle='#d8d1bf';ctx.font='8px monospace';ctx.fillText('VERS LA PLACE',207,19);
+
+  // abri
+  ctx.fillStyle='#4a3428';ctx.fillRect(world.shed.x,world.shed.y,world.shed.w,world.shed.h);
+  ctx.fillStyle='#6b4a34';ctx.beginPath();ctx.moveTo(40,82);ctx.lineTo(90,64);ctx.lineTo(140,82);ctx.fill();
+  ctx.fillStyle='#251c17';ctx.fillRect(68,105,38,31);
+
+  // clôture
+  ctx.strokeStyle='#5b402c';ctx.lineWidth=4;
+  ctx.strokeRect(26,52,426,236);
+  ctx.lineWidth=2;
+  for(let x=32;x<450;x+=30){ctx.beginPath();ctx.moveTo(x,52);ctx.lineTo(x,288);ctx.stroke()}
+  ctx.beginPath();ctx.moveTo(26,88);ctx.lineTo(452,88);ctx.moveTo(26,252);ctx.lineTo(452,252);ctx.stroke();
+
+  // herbes hautes bord chemin chevalement
+  ctx.strokeStyle='#668f3f';ctx.lineWidth=2;
+  for(let i=0;i<60;i++){
+    let x=295+(i*17)%145,y=78+(i*29)%180;
+    ctx.beginPath();ctx.moveTo(x,y+8);ctx.lineTo(x-2,y-5-(i%7));ctx.stroke();
+  }
+
+  // herbes broutables
+  for(const p of patches){
+    if(p.eaten) continue;
+    ctx.strokeStyle='#356b2f';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(p.x,p.y+4);ctx.lineTo(p.x-2,p.y-4);
+    ctx.moveTo(p.x,p.y+4);ctx.lineTo(p.x+2,p.y-5);ctx.stroke();
+  }
+
+  // obstacles
+  for(const o of obstacles){
+    if(o.type==='log'){
+      ctx.fillStyle='#6f4c32';ctx.fillRect(o.x,o.y,o.w,o.h);
+      ctx.fillStyle='#967050';ctx.fillRect(o.x+4,o.y+3,o.w-8,3);
+    } else {
+      ctx.fillStyle='#7e817a';ctx.fillRect(o.x,o.y,o.w,o.h);
+      ctx.fillStyle='#a0a39d';ctx.fillRect(o.x+3,o.y+2,o.w-6,4);
+    }
+  }
+}
+
+function goat(g, kind){
+  const s = kind==='bigflo'?1.28:1;
+  ctx.save();ctx.translate(g.x,g.y);ctx.scale(g.dir*s,s);
+  // ombre
+  ctx.fillStyle='#00000035';ctx.beginPath();ctx.ellipse(0,7,10,4,0,0,Math.PI*2);ctx.fill();
+
+  // corps
+  ctx.fillStyle='#161616';ctx.fillRect(-8,-5,15,11);
+  ctx.fillRect(3,-10,9,10); // cou/tête
+  ctx.fillRect(9,-13,6,7);
+
+  // pattes
+  ctx.fillRect(-6,4,3,9);ctx.fillRect(3,4,3,9);
+
+  // oreilles
+  ctx.fillStyle='#111';ctx.fillRect(10,-16,8,3);ctx.fillRect(7,-16,3,7);
+
+  // petites cornes
+  ctx.fillStyle='#b8ab91';ctx.fillRect(10,-18,2,5);ctx.fillRect(14,-17,2,4);
+
+  // oeil
+  ctx.fillStyle='#f3f4f6';ctx.fillRect(13,-11,2,2);
+  ctx.fillStyle='#111';ctx.fillRect(14,-11,1,1);
+
+  if(kind==='beb'){
+    ctx.fillStyle='#f5f5f5';ctx.fillRect(9,-15,4,5);
+  }
+  if(kind==='bigflo'){
+    // bouc
+    ctx.fillStyle='#242424';ctx.fillRect(15,-6,2,8);ctx.fillRect(17,-4,2,6);
+    // chaîne pendante
+    ctx.strokeStyle='#d1a72b';ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(7,-6);ctx.quadraticCurveTo(3,6+Math.sin(bigflo.chain)*2,-2,3);ctx.stroke();
+  }
+  if(kind==='bea' && bea.graze>0){
+    ctx.rotate(0.15);ctx.translate(4,4);
+  }
+  if(kind==='bea' && bea.attack>0){
+    ctx.translate(6,0);
+  }
+  ctx.restore();
+
+  // nom
+  ctx.fillStyle='#111827cc';ctx.fillRect(g.x-18,g.y-25,36,10);
+  ctx.fillStyle='#fff';ctx.font='7px monospace';ctx.textAlign='center';
+  ctx.fillText(kind.toUpperCase(),g.x,g.y-18);ctx.textAlign='left';
+}
+
+function draw(){
+  drawBackground();
+  goat(beb,'beb');
+  if(bigflo.respawn===0) goat(bigflo,'bigflo');
+  goat(bea,'bea');
+
+  if(msgTimer>0){
+    ctx.fillStyle='#111827dd';ctx.fillRect(126,290,228,20);
+    ctx.fillStyle='#fff';ctx.font='8px monospace';ctx.textAlign='center';
+    ctx.fillText(msg,240,303);ctx.textAlign='left';
+  }
+}
+
+function loop(){draw();update()}
+requestAnimationFrame(loop);
+
+window.addEventListener('keydown',e=>{
+  keys[e.key]=true;
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault();
+  if(e.key==='e'||e.key==='E'||e.key===' ')graze();
+  if(e.key==='f'||e.key==='F')headbutt();
+});
+window.addEventListener('keyup',e=>keys[e.key]=false);
+
+document.querySelectorAll('[data-k]').forEach(btn=>{
+  const k=btn.dataset.k;
+  const on=e=>{e.preventDefault();keys[k]=true};
+  const off=e=>{e.preventDefault();keys[k]=false};
+  btn.addEventListener('pointerdown',on);btn.addEventListener('pointerup',off);
+  btn.addEventListener('pointercancel',off);btn.addEventListener('pointerleave',off);
+});
+document.querySelector('[data-act="graze"]').addEventListener('pointerdown',e=>{e.preventDefault();graze()});
+document.querySelector('[data-act="headbutt"]').addEventListener('pointerdown',e=>{e.preventDefault();headbutt()});
+</script>
+</body>
+</html>
